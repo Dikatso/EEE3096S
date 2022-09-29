@@ -1,86 +1,81 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2022 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
+*******************************************************
+Info:		STM32 ADCs, GPIO Interrupts and PWM with HAL
+Author:		Amaan Vally
+*******************************************************
+In this practical you will learn to use the ADC on the STM32 using the HAL.
+Here, we will be measuring the voltage on a potentiometer and using its value
+to adjust the brightness of the on board LEDs. We set up an interrupt to switch the
+display between the blue and green LEDs.
+ 
+Code is also provided to send data from the STM32 to other devices using UART protocol
+by using HAL. You will need Putty or a Python script to read from the serial port on your PC.
+ 
+UART Connections are as follows: 5V->5V GND->GND RXD->PA2 TXD->PA3(unused).
+Open device manager and go to Ports. Plug in the USB connector with the STM powered on.
+Check the port number (COMx). Open up Putty and create a new Serial session on that COMx
+with baud rate of 9600.
   ******************************************************************************
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stdio.h"
-#include <math.h>
+ 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
- 
+#include <string.h>
+#include <stdio.h>
 /* USER CODE END Includes */
  
 /* Private typedef -----------------------------------------------------------*/
-typedef struct {
-	uint8_t seconds;
-	uint8_t minutes;
-	uint8_t hour ;
-	uint8_t dayofweek ;
-	uint8_t dayofmonth;
-	uint8_t month;
-	uint8_t year;
-} TIME;
 /* USER CODE BEGIN PTD */
-#define DELAY1 9900
-#define DELAY2 200
+ 
 /* USER CODE END PTD */
  
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define DELAY1 250
+#define DELAY2 500
 /* USER CODE END PD */
-#define DS3231_ADDRESS 0xD0
-#define FIRST_REG 0x00
-#define REG_SIZE 0x01
+ 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
  
-#define EPOCH_2022 1640988000
 /* USER CODE END PM */
  
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
+ADC_HandleTypeDef hadc;
+DMA_HandleTypeDef hdma_adc;
+ 
+TIM_HandleTypeDef htim3;
  
 UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_tx;
  
 /* USER CODE BEGIN PV */
-char buffer[14];
-uint8_t data [] = "Hello from STM32!\r\n";
-TIME time;
+char buffer[100];
+ 
+//TO DO:
+//TASK 1
+//Create global variables for debouncing and delay interval
+uint8_t delay = 1;
+uint8_t debouncing = 8;
+unsigned int future_tick_time;
 /* USER CODE END PV */
  
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_I2C1_Init(void);
 static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
-void HAL_UART_TxCpltCllback(UART_HandleTypeDef *huart);
-void pause_sec(float x);
-int bcdToDec(uint8_t val);
-uint8_t decToBcd(int val);
-void getTime (void);
-void setTime (uint8_t sec, uint8_t min, uint8_t hour, uint8_t dow, uint8_t dom, uint8_t month, uint8_t year);
-int epochFromTime(TIME time);
-void BCDtoDecimalTesting(uint8_t val);
-void decimalToBCDTesting(int val);
- 
+static void MX_ADC_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
+void EXTI0_1_IRQHandler(void);
+uint32_t pollADC(void);
+uint32_t ADCtoCRR(uint32_t adc_val);
+void print(char message[]);
  
 /* USER CODE END PFP */
  
@@ -117,32 +112,56 @@ int main(void)
  
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_I2C1_Init();
   MX_DMA_Init();
   MX_USART2_UART_Init();
+  MX_ADC_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
  
+  //TO DO:
+  //Create variables needed in while loop
+ 
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4); //Start the PWM on TIM3 Channel 4 (Green LED)
   /* USER CODE END 2 */
  
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  setTime(45, 00, 15, 4, 29, 9, 22); // Set the time to a specific time
- 
-  uint_t valtoBCD = 24;
-  int BCDtoDECValue = 64;
-  decimalToBCDTesting(valtoBCD); // method to test decimalToBCD function
-  BCDtoDecimalTesting(BCDtoDECValue);	// method to test BCDtoDecimal function
   while (1)
   {
+	  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_8); // Toggle blue LED
+	  if(HAL_GetTick() > future_tick_time){
+		  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_8); // Toggle blue LED
+		  if(delay == 1){
+			  future_tick_time = HAL_GetTick() + DELAY1;
+		  }else{
+			  future_tick_time = HAL_GetTick() + DELAY2;
+		  }
+ 
+		  //TASK 2
+		  //Test your pollADC function and display via UART
+		  sprintf(buffer, "ADC = %lu \r\n",pollADC());
+		  print(buffer);
+		  HAL_Delay(500);
+		  //TASK 3
+		  //Test your ADCtoCRR function. Display CRR value via UART
+		  sprintf(buffer, "CRR = %lu \r\n",ADCtoCRR(pollADC()));
+		  print(buffer);
+		  //TASK 4
+		  //Complete rest of implementation
+		  __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, ADCtoCRR(pollADC()));
+ 
+		  uint16_t val = (ADCtoCRR(pollADC())/47999.0)*100;
+		  sprintf(buffer, "Duty = %d%% \r\n\n",val);
+		  print(buffer);
+	  }
+ 
+	  //TO DO:
+ 
+ 
+	  //HAL_Delay(1000);
+ 
     /* USER CODE END WHILE */
-	  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_8); // toggle the GPIO pin(blue one)
-	  pause_sec(1);		// create a delay of one second
-	  getTime();		// Get time from the RTC
-	  int epoch = epochFromTime(time); // from time calculate epoch time for that time
-	  sprintf(buffer, "%d-%d-%d:%d \r\n", time.year, time.month, time.dayofmonth, time.seconds); //send time to the serial port/com#
-	  HAL_UART_Transmit(&huart2, buffer, sizeof(buffer), 1000); //send time to the serial port/com#
-	  sprintf(buffer, "%d \r\n\n", epoch);
-	  HAL_UART_Transmit(&huart2, buffer, sizeof(buffer), 1000); // print epoch to serial port
+ 
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -156,14 +175,15 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
  
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSI14;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSI14State = RCC_HSI14_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.HSI14CalibrationValue = 16;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL12;
@@ -185,59 +205,118 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_I2C1;
-  PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
-  {
-    Error_Handler();
-  }
 }
  
 /**
-  * @brief I2C1 Initialization Function
+  * @brief ADC Initialization Function
   * @param None
   * @retval None
   */
-static void MX_I2C1_Init(void)
+static void MX_ADC_Init(void)
 {
  
-  /* USER CODE BEGIN I2C1_Init 0 */
+  /* USER CODE BEGIN ADC_Init 0 */
  
-  /* USER CODE END I2C1_Init 0 */
+  /* USER CODE END ADC_Init 0 */
  
-  /* USER CODE BEGIN I2C1_Init 1 */
+  ADC_ChannelConfTypeDef sConfig = {0};
  
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x2000090E;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  /* USER CODE BEGIN ADC_Init 1 */
  
-  /** Configure Analogue filter
+  /* USER CODE END ADC_Init 1 */
+ 
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
   */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  hadc.Instance = ADC1;
+  hadc.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD;
+  hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc.Init.LowPowerAutoWait = DISABLE;
+  hadc.Init.LowPowerAutoPowerOff = DISABLE;
+  hadc.Init.ContinuousConvMode = DISABLE;
+  hadc.Init.DiscontinuousConvMode = DISABLE;
+  hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc.Init.DMAContinuousRequests = DISABLE;
+  hadc.Init.Overrun = ADC_OVR_DATA_PRESERVED;
+  if (HAL_ADC_Init(&hadc) != HAL_OK)
   {
     Error_Handler();
   }
  
-  /** Configure Digital filter
+  /** Configure for the selected ADC regular channel to be converted.
   */
-  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
+  sConfig.Channel = ADC_CHANNEL_7;
+  sConfig.Rank = ADC_RANK_CHANNEL_NUMBER;
+  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C1_Init 2 */
+  /* USER CODE BEGIN ADC_Init 2 */
  
-  /* USER CODE END I2C1_Init 2 */
+  /* USER CODE END ADC_Init 2 */
+ 
+}
+ 
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+ 
+  /* USER CODE BEGIN TIM3_Init 0 */
+ 
+  /* USER CODE END TIM3_Init 0 */
+ 
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+ 
+  /* USER CODE BEGIN TIM3_Init 1 */
+ 
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 47999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+ 
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
  
 }
  
@@ -286,6 +365,9 @@ static void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
  
   /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
   /* DMA1_Channel4_5_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel4_5_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel4_5_IRQn);
@@ -308,215 +390,81 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
  
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, LD4_Pin|LD3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD4_GPIO_Port, LD4_Pin, GPIO_PIN_RESET);
  
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
  
-  /*Configure GPIO pins : LD4_Pin LD3_Pin */
-  GPIO_InitStruct.Pin = LD4_Pin|LD3_Pin;
+  /*Configure GPIO pin : LD4_Pin */
+  GPIO_InitStruct.Pin = LD4_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  HAL_GPIO_Init(LD4_GPIO_Port, &GPIO_InitStruct);
+ 
+  /*Configure GPIO pins : PB6 PB7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF1_I2C1;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+ 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
  
 }
  
 /* USER CODE BEGIN 4 */
-void pause_sec(float x)
+void EXTI0_1_IRQHandler(void)
 {
-	/* Delay program execution for x seconds */
+	//TO DO:
+	//TASK 1
+	//Switch delay frequency
+ 
+	for(int i = 0; i > debouncing; i++); // Debounce loop
+ 
+	if(delay == 1){
+		future_tick_time = HAL_GetTick() + DELAY1;
+		delay = 2;
+	}else{
+		future_tick_time = HAL_GetTick() + DELAY2;
+		delay = 1;
+	}
+	HAL_GPIO_EXTI_IRQHandler(B1_Pin); // Clear interrupt flags
+}
+ 
+void print(char message[]){
+	HAL_UART_Transmit(&huart2, (uint8_t*)message, strlen(message), HAL_MAX_DELAY);
+}
+ 
+uint32_t pollADC(void){
 	//TO DO:
 	//TASK 2
-	//Make sure you've defined DELAY1 and DELAY2 in the private define section
- 
-	//YOUR CODE HERE
-	for(int i = 0; i < DELAY1; i++){
- 
-		for(int j = 0; j < DELAY2; j++){}
-	}
- 
+	// Complete the function body
+	HAL_ADC_Start(&hadc);
+	HAL_ADC_PollForConversion(&hadc, HAL_MAX_DELAY);
+	uint32_t val = HAL_ADC_GetValue(&hadc);
+	HAL_ADC_Stop(&hadc);
+	return val;
 }
  
-uint8_t decToBcd(int val)
-{
-//    /* Convert normal decimal numbers to binary coded decimal*/
-//	//TO DO:
-//	//TASK 3
- 
-    uint8_t bcd = 0;
- 
-    int i = 0;
- 
-    while(val != 0){
- 
-        int rem = val % 10; // Get each value from the parameter given
- 
-        val = val / 10;		// remove the value {rem} from the bcd parameter given
-        					// the val variable is reduced and used in the next iteration.
- 
-        bcd |= (rem << i);	// we shift the rem parameter acording to i, shift i units to the left
- 
-        i = i + 4;			// increment i by 4, 4 bits.
- 
-    }
- 
-    return bcd;
- 
-}
- 
- 
-int bcdToDec(uint8_t val)
-{
-//    /* Convert binary coded decimal to normal decimal numbers */
-//	//TO DO:
-//	//TASK 3
-//	//Complete the BCD to decimal function
-//
-//	//YOUR CODE HERE
-    uint8_t units = 0;		//
-    uint8_t tens = 0;
-    uint8_t ans = 0;
- 
-    units = val << 4;		// shifts the units 4 units to the left to drop the tens.
-    units = units >> 4;		// after shifts the units 4 units to the right, which is the correct position for the units
- 
-    tens = (val >> 4) * 10 ;	// shifts tens to units and multiply by 10 to get tens in decimal
-    ans = tens + units;			// add both tens and units to the value to be returned
-    return ans;
-}
- 
-void setTime (uint8_t sec, uint8_t min, uint8_t hour, uint8_t dow, uint8_t dom, uint8_t month, uint8_t year)
-{
-//    /* Write the time to the RTC using I2C */
-//	//TO DO:
-//	//TASK 4
-//
-	uint8_t set_time[7];
- 
-	set_time[0] = decToBcd(sec);
-	set_time[1] = decToBcd(min);
-	set_time[2] = decToBcd(hour);
-	set_time[3] = decToBcd(dow);
-	set_time[4] = decToBcd(dom);
-	set_time[5] = decToBcd(month);
-	set_time[6] = decToBcd(year);
-//	//fill in the address of the RTC, the address of the first register to write anmd the size of each register
-//	//The function and RTC supports multiwrite. That means we can give the function a buffer and first address
-//	//and it will write 1 byte of data, increment the register address, write another byte and so on
-	HAL_I2C_Mem_Write(&hi2c1, DS3231_ADDRESS, 0x00, 1, set_time, 7, 1000);
-}
-//
-void getTime (void)
-{
-//    /* Get the time from the RTC using I2C */
-//	//TO DO:
-//	//TASK 4
-//	//Update the global TIME time structure
-//
-	uint8_t get_time[7];
-//
-//	//fill in the address of the RTC, the address of the first register to write anmd the size of each register
-//	//The function and RTC supports multiread. That means we can give the function a buffer and first address
-//	//and it will read 1 byte of data, increment the register address, write another byte and so on
-	HAL_I2C_Mem_Read(&hi2c1, DS3231_ADDRESS, 0x00, 1, get_time, 7, 1000);
-	time.seconds = bcdToDec(get_time[0]);
-	time.minutes = bcdToDec(get_time[1]);
-	time.hour = bcdToDec(get_time[2]);
-	time.dayofweek = bcdToDec(get_time[3]);
-	time.dayofmonth = bcdToDec(get_time[4]);
-	time.month = bcdToDec(get_time[5]);
-	time.year = bcdToDec(get_time[6]);
-//
-//
-//	//YOUR CODE HERE
-//
-}
- 
-int epochFromTime(TIME time){
-    /* Convert time to UNIX epoch time */
+uint32_t ADCtoCRR(uint32_t adc_val){
 	//TO DO:
-	//TASK 5
-	//You have been given the epoch time for Saturday, January 1, 2022 12:00:00 AM GMT+02:00
-	//It is define above as EPOCH_2022. You can work from that and ignore the effects of leap years/seconds
+	//TASK 2
+	// Complete the function body
+	//HINT: The CRR value for 100% DC is 47999 (DC = CRR/ARR = CRR/47999)
+	//HINT: The ADC range is approx 0 - 4095
+	//HINT: Scale number from 0-4096 to 0 - 47999
  
-	//YOUR CODE HERE
- 
-	int day = time.dayofmonth - 1;
- 
-	switch(time.month){
-	case 2:
-		day += 31;
-		break;
-	case 3:
-			day += 59;
-			break;
-	case 4:
-			day += 90;
-			break;
-	case 5:
-			day += 120;
-			break;
-	case 6:
-			day += 151;
-			break;
-	case 7:
-			day += 181;
-			break;
-	case 8:
-			day += 212;
-			break;
-	case 9:
-			day += 243;
-			break;
-	case 10:
-			day += 273;
-			break;
-	case 11:
-			day += 304;
-			break;
-	case 12:
-			day += 334;
-			break;
-	/*
-	 *COMPLETE THE SWITCH CASE OR INSERT YOUR OWN LOGIC
-	 */
-	default:
-		day = day;
-	}
-	int add_time;
-		add_time = time.seconds;
-		add_time += time.minutes*60;
-		add_time += time.hour*3600;
-		add_time += day*86400;
-	if (time.year != 2022)
-	{
-		int year = time.year - 22;
-		add_time += year*3153600;
-	}
- 
-	return EPOCH_2022 + add_time + 50000000;
+	uint32_t val = (adc_val/4096.0)*47999;
+	return val;
 }
  
-void BCDtoDecimalTesting(uint8_t val){
-	/**
-	* funtion to test the function BCDToDecimal function, and print the output to the serial port
-	*/
-	sprintf(buffer, " BCD To Dec : %d\r\n", bcdToDec(val));
-//	HAL_UART_Transmit(&huart2, buffer, sizeof(buffer), 1000);
-	HAL_UART_Transmit(&huart2, buffer, sizeof(buffer), 1000);
-}
- 
-void decimalToBCDTesting(int val){
-	/**
-	 * funtion to test the function decimalToBCD function, and print the output to the serial port
-	 */
-	sprintf(buffer, " Dec To BCD : %d\r\n", decToBcd(val));
-	HAL_UART_Transmit(&huart2, buffer, sizeof(buffer), 1000);
-}
 /* USER CODE END 4 */
  
 /**
